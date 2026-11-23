@@ -489,6 +489,12 @@ PyObject *aws_py_s3_client_make_meta_request(PyObject *self, PyObject *args) {
         meta_request->has_send_buffer = true;
         request_body =
             aws_byte_cursor_from_array(meta_request->send_py_buffer.buf, (size_t)meta_request->send_py_buffer.len);
+        if (request_body.len == 0 && request_body.ptr == NULL) {
+            /* The buffer protocol allows an empty buffer with no memory behind it, and aws-c-s3 treats a NULL
+             * request_body as unset. Point it at a static byte so it uploads an empty object, like an empty file. */
+            static uint8_t s_empty_body = 0;
+            request_body = aws_byte_cursor_from_array(&s_empty_body, 0);
+        }
     }
 
     struct aws_s3_meta_request_options s3_meta_request_opt = {

@@ -822,6 +822,29 @@ class S3RequestTest(NativeResourceTest):
                 type=S3RequestType.DEFAULT,
                 operation_name="DeleteObject").finished_future.result(self.timeout)
 
+    def test_put_object_send_buffer_empty(self):
+        import uuid
+        s3_client = s3_client_new(False, self.region, 5 * MB)
+        path = "/crt-python-zero-copy-test/" + str(uuid.uuid4())
+        host = self._build_endpoint_string(self.region, self.bucket_name)
+        try:
+            # An empty send_buffer uploads an empty object, and downloading it into a buffer writes 0 bytes.
+            for data in (b'', bytearray(), memoryview(b'')):
+                self.assertIsNone(s3_client.make_request(
+                    request=HttpRequest("PUT", path, HttpHeaders([("host", host)])),
+                    type=S3RequestType.PUT_OBJECT,
+                    send_buffer=data).finished_future.result(self.timeout))
+
+                buf = bytearray(b'\xab' * 16)
+                finished_future = self._get_object_into(s3_client, self._get_object_request(path), buf)
+                self.assertEqual(0, finished_future.result())
+                self.assertEqual(b'\xab' * 16, bytes(buf))
+        finally:
+            s3_client.make_request(
+                request=HttpRequest("DELETE", path, HttpHeaders([("host", host)])),
+                type=S3RequestType.DEFAULT,
+                operation_name="DeleteObject").finished_future.result(self.timeout)
+
     def test_put_object_filepath(self):
         content_length = os.stat(self.temp_put_obj_file_path).st_size
         request = self._put_object_request(None, content_length)
