@@ -610,11 +610,13 @@ class S3Client(NativeResource):
                 response body is written directly to a file and the
                 `on_body` callback is not invoked. This should give better
                 performance than writing to file from the `on_body` callback.
+                Not together with `recv_buffer`.
 
             send_filepath (Optional[str]): Optional file path. If set, the
                 request body is read directly from a file and the
                 request's `body_stream` is ignored. This should give better
                 performance than reading a file from a stream.
+                Not together with `send_buffer`.
 
             recv_buffer (Optional[buffer]): Optional writable, C-contiguous buffer
                 (e.g. `bytearray`, `memoryview`, `mmap`, `array.array`, a NumPy array).
@@ -622,8 +624,9 @@ class S3Client(NativeResource):
                 `recv_filepath` or `on_body`. If set, the response body is written
                 straight into this buffer by the client's threads, with no copy and
                 without taking the GIL, and the `on_body` callback is not invoked.
-                The first byte of the requested range lands at index 0; to use part
-                of a buffer, pass a `memoryview` slice of it.
+                The first byte of the requested range lands at index 0, and the whole
+                buffer is space for the download: any existing contents are
+                overwritten. To use part of a buffer, pass a `memoryview` slice of it.
 
                 On success, :attr:`S3Request.finished_future` resolves to the number
                 of bytes written, so the data is `recv_buffer[:n]` and the rest of
@@ -846,11 +849,6 @@ class S3Request(NativeResource):
         if type == S3RequestType.DEFAULT and not operation_name:
             raise ValueError("'operation_name' must be set when using S3RequestType.DEFAULT")
 
-        # aws-c-s3 rejects the other invalid combinations itself. This one it can't see: with recv_buffer, the
-        # native body callback isn't installed at all, so on_body would silently never be invoked.
-        if recv_buffer is not None and on_body is not None:
-            raise ValueError("'on_body' is not invoked when 'recv_buffer' is set, so it cannot be combined")
-
         super().__init__()
 
         self._finished_future = Future()
@@ -927,6 +925,7 @@ class S3Request(NativeResource):
             max_active_connections_override,
             recv_buffer,
             send_buffer,
+            on_body is not None,
             s3_request_core)
 
     @property
@@ -1050,7 +1049,8 @@ class _S3RequestCore:
             did_validate_checksum,
             checksum_validation_algorithm,
             bytes_received):
-        # bytes_received is the count written into recv_buffer, or None if the request has no recv_buffer.
+        # bytes_received is the count written into recv_buffer, None if the request has no recv_buffer, or -1 if
+        # the native layer couldn't report it.
         # If C layer gives status_code 0, that means "unknown"
         if status_code == 0:
             status_code = None
@@ -1074,6 +1074,10 @@ class _S3RequestCore:
                         headers=error_headers,
                         body=error_body,
                         operation_name=error_operation_name)
+            self._finished_future.set_exception(error)
+        elif bytes_received == -1:
+            # The native layer couldn't create the count (out of memory), so fail rather than resolve to None.
+            error = MemoryError("failed to report bytes written to recv_buffer")
             self._finished_future.set_exception(error)
         else:
             self._finished_future.set_result(bytes_received)

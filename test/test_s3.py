@@ -306,8 +306,7 @@ class S3ClientTest(NativeResourceTest):
         with self.assertRaises(RuntimeError):
             s3_client.make_request(request=self._recv_buffer_request(), type=S3RequestType.GET_OBJECT,
                                    recv_buffer=buf, recv_filepath="recv_buffer_test.out")
-        # Rejected by the binding, since aws-c-s3 never sees on_body.
-        with self.assertRaises(ValueError):
+        with self.assertRaises(RuntimeError):
             s3_client.make_request(request=self._recv_buffer_request(), type=S3RequestType.GET_OBJECT,
                                    recv_buffer=buf, on_body=lambda **kwargs: None)
         # Read-only, and not contiguous (a view of another bytearray, since a live view would also lock `buf`).
@@ -792,8 +791,8 @@ class S3RequestTest(NativeResourceTest):
         host = self._build_endpoint_string(self.region, self.bucket_name)
         try:
             # No Content-Length header: the client takes it from the buffer. Multipart from a bytearray, then a
-            # single PUT from (read-only) bytes.
-            for data in (bytearray(b'\x5c' * (20 * MB)), b'\x5c' * 1000):
+            # single PUT from (read-only) bytes. Random bytes, so data landing at the wrong offset is caught.
+            for data in (bytearray(os.urandom(20 * MB)), os.urandom(1000)):
                 s3_request = s3_client.make_request(
                     request=HttpRequest("PUT", path, HttpHeaders([("host", host)])),
                     type=S3RequestType.PUT_OBJECT,

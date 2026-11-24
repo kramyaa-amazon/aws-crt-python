@@ -238,7 +238,9 @@ static void s_s3_request_on_finish(
         bytes_received = PyLong_FromSize_t(request_binding->recv_buffer.len);
         if (!bytes_received) {
             PyErr_WriteUnraisable(request_binding->py_core);
-            /* We MUST keep going and invoke the final callback */
+            /* -1 tells _on_finish the count couldn't be reported, so it fails the future instead of returning
+             * None. We MUST keep going and invoke the final callback */
+            bytes_received = PyLong_FromLong(-1);
         }
     }
 
@@ -370,10 +372,11 @@ PyObject *aws_py_s3_client_make_meta_request(PyObject *self, PyObject *args) {
     uint64_t max_active_connections_override;                               /* K */
     PyObject *recv_buffer_py;                                               /* O */
     PyObject *send_buffer_py;                                               /* O */
+    int has_on_body;                                                        /* p - boolean predicate */
     PyObject *py_core;                                                      /* O */
     if (!PyArg_ParseTuple(
             args,
-            "OOOizOOzzs#iipz#iiKKppdpKOOO",
+            "OOOizOOzzs#iipz#iiKKppdpKOOpO",
             &py_s3_request,
             &s3_client_py,
             &http_request_py,
@@ -401,6 +404,7 @@ PyObject *aws_py_s3_client_make_meta_request(PyObject *self, PyObject *args) {
             &max_active_connections_override,
             &recv_buffer_py,
             &send_buffer_py,
+            &has_on_body,
             &py_core)) {
         return NULL;
     }
@@ -508,8 +512,9 @@ PyObject *aws_py_s3_client_make_meta_request(PyObject *self, PyObject *args) {
         .recv_buffer = meta_request->has_recv_buffer ? &meta_request->recv_buffer : NULL,
         .request_body = request_body,
         .headers_callback = s_s3_request_on_headers,
-        /* aws-c-s3 delivers the body into recv_buffer itself, and rejects a body callback with it */
-        .body_callback = meta_request->has_recv_buffer ? NULL : s_s3_request_on_body,
+        /* aws-c-s3 delivers the body into recv_buffer itself, so the body callback is only installed with a
+         * recv_buffer if the caller passed on_body; aws-c-s3 then rejects the combination, like the others. */
+        .body_callback = (meta_request->has_recv_buffer && !has_on_body) ? NULL : s_s3_request_on_body,
         .finish_callback = s_s3_request_on_finish,
         .shutdown_callback = s_s3_request_on_shutdown,
         .progress_callback = s_s3_request_on_progress,
